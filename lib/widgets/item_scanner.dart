@@ -175,7 +175,7 @@ class _ItemScannerState extends State<ItemScanner> {
     );
   }
 
-  // 이미지 프리뷰 및 결과 UI (key 추가 외 변경 없음)
+  // 이미지 프리뷰 및 결과 UI (수정됨)
   Widget _buildImagePreview() {
     // _selectedImage가 null이 아닐 때만 호출됩니다.
     if (_selectedImage == null) {
@@ -192,16 +192,16 @@ class _ItemScannerState extends State<ItemScanner> {
             // 촬영/업로드된 이미지 표시
             ClipRRect(
               borderRadius: BorderRadius.circular(8),
-              child: SizedBox(
-                height: 200,
-                width: double.infinity,
+              child: AspectRatio(
+                aspectRatio: 1.0, // 1:1 비율 강제
                 child: FutureBuilder<Uint8List>(
                   future: _selectedImage!.readAsBytes(),
                   builder: (context, snap) {
                     if (!snap.hasData) {
                       return const Center(child: CircularProgressIndicator());
                     }
-                    return Image.memory(snap.data!, fit: BoxFit.cover);
+                    // BoxFit.contain을 사용하여 이미지가 잘리지 않고 비율에 맞게 표시
+                    return Image.memory(snap.data!, fit: BoxFit.contain);
                   },
                 ),
               ),
