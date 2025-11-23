@@ -1,14 +1,11 @@
-import 'dart:io';
-import 'dart:math';
 import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
-import 'package:image/image.dart' as img;
-import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:image_picker/image_picker.dart';
 
+import 'tflite_detector.dart';
 import 'object_overlay_painter.dart';
 
 typedef OnPhotoCaptured = void Function(Uint8List? imageBytes, List<String> labels);
@@ -28,115 +25,180 @@ class CameraDetectorView extends StatefulWidget {
 }
 
 class _CameraDetectorViewState extends State<CameraDetectorView> {
-  // --- 웹용 변수 ---
-  CameraController? _webCameraController;
-  String? _detectedLabel;
-  bool _isWebCameraInitialized = false;
-
-  // --- 카메라 변수 (모바일/앱용) ---
   CameraController? _cameraController;
   List<CameraDescription>? _cameras;
-  final int _cameraIndex = 0;
   bool _isCameraInitialized = false;
-
-  // --- 카메라 원본 해상도와 센서 방향 ---
   Size? _previewSize;
-  int _sensorOrientation = 90;
 
-  // --- ML Kit 변수 (모바일/앱용) ---
-  ObjectDetector? _objectDetector;
+  TfliteDetector? _detector;
   bool _isProcessing = false;
-  List<DetectedObject> _detectedObjects = [];
+  List<Map<String, dynamic>> _detectedObjects = [];
+  bool _isModelLoading = false;
 
   @override
   void initState() {
     super.initState();
-    if (kIsWeb) {
-      _initializeWebCamera();
-    } else {
-      _initializeDetector();
-      _initializeCameraWithPermission();
+    _initializeDetector();
+    if (!kIsWeb) {
+      _initializeCamera();
     }
   }
 
   @override
   void dispose() {
-    if (kIsWeb) {
-      // 웹에서는 이미지 스트림을 사용하지 않으므로 stopImageStream() 호출 불필요
-      _webCameraController?.dispose();
-    } else {
-      _cameraController?.stopImageStream();
+    if (!kIsWeb) {
+      try {
+        if (_cameraController?.value.isStreamingImages ?? false) {
+          _cameraController?.stopImageStream();
+        }
+      } catch (e) {
+        debugPrint('스트림 중지 오류: $e');
+      }
       _cameraController?.dispose();
-      _objectDetector?.close();
+      _detector?.dispose();
     }
     super.dispose();
   }
 
-  // 웹용 카메라 초기화
-  Future<void> _initializeWebCamera() async {
+  Future<void> _initializeDetector() async {
+    setState(() {
+      _isModelLoading = true;
+    });
+
     try {
-      final cameras = await availableCameras();
-      if (cameras.isEmpty) {
-        debugPrint('웹에서 사용 가능한 카메라가 없습니다.');
-        widget.onCancel();
-        return;
-      }
-
-      _webCameraController = CameraController(
-        cameras.first,
-        ResolutionPreset.medium,
-        enableAudio: false,
-      );
-
-      await _webCameraController!.initialize();
+      _detector = TfliteDetector();
+      
+      // 현재 사용 중인 모델 경로
+      final modelPath = 'assets/best_float32.tflite';  // best_float32.tflite 사용
+      
+      await _detector!.initialize(modelPath: modelPath);
       
       if (mounted) {
         setState(() {
-          _isWebCameraInitialized = true;
+          _isModelLoading = false;
         });
-        // 웹에서는 이미지 스트림을 사용하지 않고, 타이머로 디텍션 시뮬레이션
-        _startWebDetectionTimer();
       }
-    } catch (e) {
-      debugPrint('웹 카메라 초기화 오류: $e');
+      debugPrint('✅ TFLite Detector 초기화 완료 (웹: $kIsWeb)');
+    } catch (e, stackTrace) {
+      debugPrint('❌ TFLite Detector 초기화 오류: $e');
+      debugPrint('스택 트레이스: $stackTrace');
+      
+      if (kIsWeb) {
+        debugPrint('⚠️ 웹에서는 TFLite가 지원되지 않을 수 있습니다.');
+        debugPrint('   웹에서는 TensorFlow.js를 사용해야 할 수 있습니다.');
+      }
+      
       if (mounted) {
-        widget.onCancel();
+        setState(() {
+          _isModelLoading = false;
+        });
+        // 웹에서는 취소하지 않고 이미지 선택만 허용
+        if (!kIsWeb) {
+          widget.onCancel();
+        }
       }
     }
   }
 
-  // 웹용 디텍션 타이머 (이미지 스트림 대신 사용)
-  void _startWebDetectionTimer() {
-    // 주기적으로 디텍션 시뮬레이션 (이미지 스트림 없이)
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted && _isWebCameraInitialized) {
-        // 간단한 디텍션 시뮬레이션
-        final mockLabels = ['bottle', 'power bank', 'hair dryer', 'laptop', 'phone'];
-        final randomIndex = DateTime.now().millisecond % mockLabels.length;
-        
-        setState(() {
-          _detectedLabel = mockLabels[randomIndex];
-        });
-        
-        // 계속해서 주기적으로 디텍션 시뮬레이션
-        _startWebDetectionTimer();
+  Future<void> _initializeCamera() async {
+    final status = await Permission.camera.request();
+    if (!status.isGranted) {
+      debugPrint('❌ 카메라 권한 거부');
+      widget.onCancel();
+      return;
+    }
+
+    try {
+      _cameras = await availableCameras();
+      if (_cameras == null || _cameras!.isEmpty) {
+        debugPrint('❌ 사용 가능한 카메라 없음');
+        widget.onCancel();
+        return;
+      }
+
+      _cameraController = CameraController(
+        _cameras![0],
+        ResolutionPreset.low, // 성능 최적화: 낮은 해상도로 더 빠른 처리
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.yuv420,
+      );
+
+      await _cameraController!.initialize();
+
+      if (!mounted) return;
+
+      setState(() {
+        _isCameraInitialized = true;
+        _previewSize = _cameraController!.value.previewSize;
+      });
+
+      _startImageStream();
+      debugPrint('✅ 카메라 초기화 완료');
+    } catch (e) {
+      debugPrint('❌ 카메라 초기화 오류: $e');
+      widget.onCancel();
+    }
+  }
+
+  void _startImageStream() {
+    DateTime? lastDetectionTime;
+    int frameSkipCount = 0;
+    const int framesToSkip = 1; // 2프레임마다 1번씩 처리 (약 66ms @ 30fps)
+
+    _cameraController?.startImageStream((CameraImage cameraImage) async {
+      if (_isProcessing || _detector == null || !_detector!.isInitialized) {
+        return;
+      }
+
+      // 프레임 스킵 (성능 최적화)
+      frameSkipCount++;
+      if (frameSkipCount < framesToSkip) {
+        return;
+      }
+      frameSkipCount = 0;
+
+      // 최소 간격 체크 (200ms로 조정 - 반응성과 성능 균형)
+      final now = DateTime.now();
+      if (lastDetectionTime != null &&
+          now.difference(lastDetectionTime!).inMilliseconds < 200) {
+        return;
+      }
+      lastDetectionTime = now;
+
+      _isProcessing = true;
+      try {
+        final detections = await _detector!.detectFromCameraImage(
+          cameraImage,
+          threshold: 0.25,
+          maxDetections: 1, // 최고 신뢰도 객체 1개만 탐지
+        );
+
+        // 클래스 이름 추가 (빠른 매핑)
+        final detectionsWithLabels = <Map<String, dynamic>>[];
+        for (final det in detections) {
+          final classIndex = det['classIndex'] as int;
+          final className = _detector!.getTravelClassName(classIndex) ?? 'Unknown';
+          detectionsWithLabels.add({
+            ...det,
+            'className': className,
+          });
+        }
+
+        if (mounted) {
+          setState(() {
+            _detectedObjects = detectionsWithLabels;
+          });
+        }
+      } catch (e) {
+        debugPrint('❌ 탐지 오류: $e');
+      } finally {
+        _isProcessing = false;
       }
     });
   }
 
-  // 1. ML Kit 감지기 초기화 (앱용)
-  void _initializeDetector() {
-    final options = ObjectDetectorOptions(
-      mode: DetectionMode.stream,
-      classifyObjects: true,
-      multipleObjects: false, // 하나의 객체만 감지
-    );
-    _objectDetector = ObjectDetector(options: options);
-  }
-
-  // 웹용 이미지 캡처
-  Future<void> _captureWebPhoto() async {
-    if (_webCameraController == null || !_webCameraController!.value.isInitialized) {
+  Future<void> _capturePhoto() async {
+    if (_cameraController == null || !_cameraController!.value.isInitialized) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('카메라가 초기화되지 않았습니다.')),
       );
@@ -144,229 +206,260 @@ class _CameraDetectorViewState extends State<CameraDetectorView> {
     }
 
     try {
-      // 웹에서는 이미지 스트림을 사용하지 않으므로, 바로 takePicture() 호출 가능
-      // supportsImageStreaming()이 false인 경우를 대비해 안전하게 처리
-      final imageFile = await _webCameraController!.takePicture();
+      if (_cameraController!.value.isStreamingImages) {
+        await _cameraController!.stopImageStream();
+      }
+
+      final imageFile = await _cameraController!.takePicture();
       final imageBytes = await imageFile.readAsBytes();
 
-      // 감지된 라벨이 있으면 사용, 없으면 빈 리스트
-      final List<String> labels = _detectedLabel != null && _detectedLabel!.isNotEmpty
-          ? <String>[_detectedLabel!]
-          : <String>[];
+      // 최종 탐지 수행
+      List<String> labels = [];
+      if (_detector != null && _detector!.isInitialized) {
+        try {
+          final detectedObjects = await _detector!.detectFromImageBytes(
+            imageBytes,
+            threshold: 0.25,
+            maxDetections: 1, // 최고 신뢰도 객체 1개만 탐지
+          );
+
+          if (detectedObjects.isNotEmpty) {
+            labels = detectedObjects
+                .map((obj) {
+                  final classIndex = obj['classIndex'] as int;
+                  return _detector!.getTravelClassName(classIndex) ?? 'unknown';
+                })
+                .where((label) => label != 'unknown')
+                .toSet()
+                .toList();
+          }
+        } catch (e) {
+          debugPrint('❌ 촬영 이미지 탐지 오류: $e');
+        }
+      }
 
       widget.onPhotoCaptured(imageBytes, labels);
     } catch (e) {
-      debugPrint('웹 이미지 캡처 오류: $e');
+      debugPrint('❌ 사진 촬영 오류: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('사진 촬영 중 오류가 발생했습니다: $e')),
       );
     }
   }
 
-  // 2. 권한 요청 및 카메라 초기화
-  Future<void> _initializeCameraWithPermission() async {
-    if (await Permission.camera.request().isGranted) {
-      _cameras = await availableCameras();
-      if (_cameras != null && _cameras!.isNotEmpty) {
-        _cameraController = CameraController(
-          _cameras![_cameraIndex],
-          ResolutionPreset.high,
-          enableAudio: false,
-          imageFormatGroup: ImageFormatGroup.nv21,
-        );
-        await _cameraController!.initialize();
-
-        _previewSize = _cameraController!.value.previewSize;
-        _sensorOrientation = _cameraController!.description.sensorOrientation;
-
-        if (!mounted) return;
-        setState(() {
-          _isCameraInitialized = true;
-        });
-        _startImageStream();
-      }
-    } else {
-      debugPrint('카메라 권한이 거부되었습니다.');
-      widget.onCancel();
-    }
-  }
-
-  // 3. 실시간 이미지 스트림 처리 시작
-  void _startImageStream() {
-    _cameraController?.startImageStream((CameraImage cameraImage) {
-      if (_isProcessing) return;
-      final inputImage = _inputImageFromCameraImage(cameraImage);
-      if (inputImage == null) return;
-      _processImage(inputImage);
-    });
-  }
-
-  // 4. ML Kit 이미지 처리 (앱용)
-  Future<void> _processImage(InputImage inputImage) async {
-    if (_objectDetector == null) return;
-    _isProcessing = true;
-    try {
-      final List<DetectedObject> objects =
-          await _objectDetector!.processImage(inputImage);
-      if (mounted) {
-        setState(() {
-          _detectedObjects = objects;
-        });
-      }
-    } catch (e) {
-      debugPrint("Error processing image: $e");
-    }
-    _isProcessing = false;
-  }
-
-  // 5. "촬영하기" 버튼 로직 (좌표 변환 로직 전면 수정)
-  Future<void> _capturePhoto() async {
-    if (_cameraController == null ||
-        !_cameraController!.value.isInitialized ||
-        _previewSize == null) {
+  /// 웹에서 이미지 선택 및 탐지
+  Future<void> _pickAndDetectImage() async {
+    if (_detector == null || !_detector!.isInitialized) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('모델이 초기화되지 않았습니다.')),
+      );
       return;
     }
 
-    await _cameraController?.stopImageStream();
-    _isProcessing = false;
+    setState(() {
+      _isProcessing = true;
+    });
 
-    final imageFile = await _cameraController!.takePicture();
-    final detectedObject = _detectedObjects.firstOrNull;
+    try {
+      final picker = ImagePicker();
+      final pickedFile = await picker.pickImage(
+        source: ImageSource.camera,
+        preferredCameraDevice: CameraDevice.rear,
+      );
 
-    XFile finalImageToPass = imageFile;
+      if (pickedFile == null) {
+        setState(() {
+          _isProcessing = false;
+        });
+        return;
+      }
 
-    if (detectedObject != null) {
-      try {
-        final imageBytes = await imageFile.readAsBytes();
-        final img.Image? originalImage = img.decodeImage(imageBytes);
+      final imageBytes = await pickedFile.readAsBytes();
 
-        if (originalImage != null) {
-          final Rect boundingBox = detectedObject.boundingBox;
+      // 이미지 표시를 위한 임시 저장
+      setState(() {
+        _selectedImageBytes = imageBytes;
+      });
 
-          final double imageWidth = originalImage.width.toDouble();
-          final double imageHeight = originalImage.height.toDouble();
+      // 객체 탐지 수행
+      final detections = await _detector!.detectFromImageBytes(
+        imageBytes,
+        threshold: 0.25,
+        maxDetections: 5,
+      );
 
-          final double previewWidth = _previewSize!.width;
-          final double previewHeight = _previewSize!.height;
+      // 클래스 이름 추가
+      final detectionsWithLabels = detections.map((det) {
+        final classIndex = det['classIndex'] as int;
+        final className = _detector!.getTravelClassName(classIndex) ?? 'Unknown';
+        return {
+          ...det,
+          'className': className,
+        };
+      }).toList();
 
-          final double imageAspectRatio = imageWidth / imageHeight;
-          final double previewAspectRatio = previewWidth / previewHeight;
+      if (mounted) {
+        setState(() {
+          _detectedObjects = detectionsWithLabels;
+          _isProcessing = false;
+        });
+      }
 
-          double scale;
-          double offsetX = 0;
-          double offsetY = 0;
+      // 라벨 추출
+      List<String> labels = detectionsWithLabels
+          .map((obj) => obj['className'] as String)
+          .where((label) => label != 'Unknown')
+          .toSet()
+          .toList();
 
-          if (previewAspectRatio > imageAspectRatio) {
-            scale = previewWidth / imageWidth;
-            final scaledImageHeight = imageHeight * scale;
-            offsetY = (scaledImageHeight - previewHeight) / 2.0;
-          } else {
-            scale = previewHeight / imageHeight;
-            final scaledImageWidth = imageWidth * scale;
-            offsetX = (scaledImageWidth - previewWidth) / 2.0;
-          }
-
-          final double imgLeft = (boundingBox.left + offsetX) / scale;
-          final double imgTop = (boundingBox.top + offsetY) / scale;
-          final double imgWidth = boundingBox.width / scale;
-          final double imgHeight = boundingBox.height / scale;
-
-          final double boxCenterX = imgLeft + imgWidth / 2.0;
-          final double boxCenterY = imgTop + imgHeight / 2.0;
-          final double longSide = max(imgWidth, imgHeight);
-          final double squareSize = longSide * 1.2; 
-
-          int finalCropSize = squareSize.round();
-
-          finalCropSize =
-              min(finalCropSize, min(imageWidth.round(), imageHeight.round()));
-
-          int finalCropX = (boxCenterX - finalCropSize / 2.0)
-              .round()
-              .clamp(0, imageWidth.round() - finalCropSize);
-          int finalCropY = (boxCenterY - finalCropSize / 2.0)
-              .round()
-              .clamp(0, imageHeight.round() - finalCropSize);
-
-          final img.Image croppedImage = img.copyCrop(
-            originalImage,
-            x: finalCropX,
-            y: finalCropY,
-            width: finalCropSize,
-            height: finalCropSize,
-          );
-
-          final croppedBytes = img.encodeJpg(croppedImage);
-          final tempDir = await getTemporaryDirectory();
-          final filePath =
-              '${tempDir.path}/cropped_${DateTime.now().millisecondsSinceEpoch}.jpg';
-          final newFile = await File(filePath).writeAsBytes(croppedBytes);
-
-          finalImageToPass = XFile(newFile.path);
-        }
-      } catch (e) {
-        debugPrint("이미지 자르기 오류: $e");
+      widget.onPhotoCaptured(imageBytes, labels);
+    } catch (e) {
+      debugPrint('❌ 웹 이미지 탐지 오류: $e');
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('이미지 탐지 중 오류가 발생했습니다: $e')),
+        );
       }
     }
-
-    final List<String> labels = _detectedObjects
-        .map((obj) => obj.labels.isNotEmpty ? obj.labels.first.text : "")
-        .where((label) => label.isNotEmpty)
-        .toSet()
-        .toList()
-        .cast<String>();
-
-    final imageBytes = await finalImageToPass.readAsBytes();
-    widget.onPhotoCaptured(imageBytes, labels);
   }
 
-  // 6. CameraImage -> InputImage 변환
-  InputImage? _inputImageFromCameraImage(CameraImage image) {
-    if (_cameraController == null) return null;
-
-    final camera = _cameraController!.description;
-    final sensorOrientation = camera.sensorOrientation;
-    InputImageRotation rotation;
-
-    if (defaultTargetPlatform == TargetPlatform.iOS) {
-      rotation = InputImageRotationValue.fromRawValue(sensorOrientation) ??
-          InputImageRotation.rotation0deg;
-    } else {
-      rotation =
-          InputImageRotationValue.fromRawValue((sensorOrientation + 360) % 360) ??
-              InputImageRotation.rotation0deg;
+  /// 웹에서 갤러리에서 이미지 선택 및 탐지
+  Future<void> _pickFromGallery() async {
+    if (_detector == null || !_detector!.isInitialized) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('모델이 초기화되지 않았습니다.')),
+      );
+      return;
     }
 
-    final format = InputImageFormatValue.fromRawValue(image.format.raw);
-    if (format != InputImageFormat.nv21) {
-      debugPrint("지원하지 않는 이미지 포맷: ${image.format.raw}");
-      return null;
-    }
+    setState(() {
+      _isProcessing = true;
+    });
 
-    return InputImage.fromBytes(
-      bytes: image.planes[0].bytes,
-      metadata: InputImageMetadata(
-        size: Size(image.width.toDouble(), image.height.toDouble()),
-        rotation: rotation,
-        format: InputImageFormat.nv21,
-        bytesPerRow: image.planes[0].bytesPerRow,
-      ),
-    );
+    try {
+      final picker = ImagePicker();
+      final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+
+      if (pickedFile == null) {
+        setState(() {
+          _isProcessing = false;
+        });
+        return;
+      }
+
+      final imageBytes = await pickedFile.readAsBytes();
+
+      // 이미지 표시를 위한 임시 저장
+      setState(() {
+        _selectedImageBytes = imageBytes;
+      });
+
+      // 객체 탐지 수행
+      final detections = await _detector!.detectFromImageBytes(
+        imageBytes,
+        threshold: 0.25,
+        maxDetections: 5,
+      );
+
+      // 클래스 이름 추가
+      final detectionsWithLabels = detections.map((det) {
+        final classIndex = det['classIndex'] as int;
+        final className = _detector!.getTravelClassName(classIndex) ?? 'Unknown';
+        return {
+          ...det,
+          'className': className,
+        };
+      }).toList();
+
+      if (mounted) {
+        setState(() {
+          _detectedObjects = detectionsWithLabels;
+          _isProcessing = false;
+        });
+      }
+
+      // 라벨 추출
+      List<String> labels = detectionsWithLabels
+          .map((obj) => obj['className'] as String)
+          .where((label) => label != 'Unknown')
+          .toSet()
+          .toList();
+
+      widget.onPhotoCaptured(imageBytes, labels);
+    } catch (e) {
+      debugPrint('❌ 웹 이미지 탐지 오류: $e');
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('이미지 탐지 중 오류가 발생했습니다: $e')),
+        );
+      }
+    }
   }
 
-  // --- UI 빌드 메소드 ---
+  Uint8List? _selectedImageBytes; // 웹에서 선택한 이미지 저장
+
   @override
   Widget build(BuildContext context) {
+    // 웹에서는 이미지 선택 방식 사용
     if (kIsWeb) {
-      // --- 웹에서는 camera 패키지로 카메라 프리뷰 및 실시간 디텍션 처리 ---
       return Card(
-        key: const ValueKey('web_camera'),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
             children: [
-              // 감지된 라벨 표시
-              if (_detectedLabel != null && _detectedLabel!.isNotEmpty)
+              // 선택한 이미지 미리보기
+              if (_selectedImageBytes != null)
+                Container(
+                  constraints: const BoxConstraints(
+                    maxHeight: 400,
+                    maxWidth: double.infinity,
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.memory(
+                      _selectedImageBytes!,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                )
+              else
+                Container(
+                  height: 300,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[200],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.image,
+                          size: 64,
+                          color: Colors.grey[400],
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          '이미지를 선택하세요',
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 16,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 16),
+              
+              // 감지된 객체 표시
+              if (_detectedObjects.isNotEmpty)
                 Container(
                   padding: const EdgeInsets.all(12),
                   margin: const EdgeInsets.only(bottom: 16),
@@ -383,129 +476,118 @@ class _CameraDetectorViewState extends State<CameraDetectorView> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          '감지된 아이템: $_detectedLabel',
+                          '감지된 아이템: ${_detectedObjects.map((obj) => obj['className'] ?? 'Unknown').where((name) => name != 'Unknown').toSet().join(", ")}',
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
                             color: Theme.of(context).colorScheme.onPrimaryContainer,
                           ),
-                        ),
-                      ),
-                    ],
-                  ),
-                )
-              else
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  margin: const EdgeInsets.only(bottom: 16),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    children: [
-                      const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        '아이템 감지 중...',
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                     ],
                   ),
                 ),
-              // 카메라 프리뷰
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: _isWebCameraInitialized &&
-                        _webCameraController!.value.isInitialized
-                    ? AspectRatio(
-                        aspectRatio: _webCameraController!.value.aspectRatio,
-                        child: CameraPreview(_webCameraController!),
-                      )
-                    : Container(
-                        color: Colors.black,
-                        height: 300,
-                        child: const Center(
-                          child: CircularProgressIndicator(
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-              ),
-              const SizedBox(height: 16),
-              // "촬영하기" / "취소" 버튼
+              
+              // 모델 로딩 상태
+              if (_isModelLoading)
+                const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      CircularProgressIndicator(),
+                      SizedBox(height: 8),
+                      Text('모델 로딩 중...'),
+                    ],
+                  ),
+                ),
+              
+              // 버튼
               Row(
                 children: [
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: _isWebCameraInitialized
-                          ? _captureWebPhoto
+                      onPressed: (_detector != null && 
+                                  _detector!.isInitialized && 
+                                  !_isProcessing)
+                          ? _pickAndDetectImage
                           : null,
                       icon: const Icon(Icons.camera_alt),
-                      label: const Text('촬영하기'),
+                      label: const Text('카메라로 촬영'),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: widget.onCancel,
-                      icon: const Icon(Icons.close),
-                      label: const Text('취소'),
+                      onPressed: (_detector != null && 
+                                  _detector!.isInitialized && 
+                                  !_isProcessing)
+                          ? _pickFromGallery
+                          : null,
+                      icon: const Icon(Icons.photo_library),
+                      label: const Text('갤러리에서 선택'),
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: widget.onCancel,
+                icon: const Icon(Icons.close),
+                label: const Text('취소'),
               ),
             ],
           ),
         ),
       );
     }
+
     return Card(
-      key: const ValueKey('camera'),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            // 1. 카메라 뷰 + 오버레이
+            // 카메라 프리뷰
             ClipRRect(
               borderRadius: BorderRadius.circular(8),
-              child: _isCameraInitialized &&
-                      _cameraController!.value.isInitialized
+              child: _isCameraInitialized && _cameraController!.value.isInitialized
                   ? AspectRatio(
                       aspectRatio: _cameraController!.value.aspectRatio,
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
                           CameraPreview(_cameraController!),
-                          Builder(builder: (context) {
-                            final isRotated = _sensorOrientation == 90 ||
-                                _sensorOrientation == 270;
-                            final logicalSize = isRotated
-                                ? Size(_previewSize!.height, _previewSize!.width)
-                                : _previewSize!;
-
-                            return CustomPaint(
+                          if (_previewSize != null && _detectedObjects.isNotEmpty)
+                            CustomPaint(
                               painter: ObjectOverlayPainter(
                                 objects: _detectedObjects,
-                                imageSize: logicalSize,
+                                imageSize: _previewSize!,
                               ),
-                            );
-                          }),
+                            ),
                         ],
                       ),
                     )
                   : Container(
                       color: Colors.black,
-                      child: const Center(child: CircularProgressIndicator()),
+                      child: Center(
+                        child: _isModelLoading
+                            ? const Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  CircularProgressIndicator(),
+                                  SizedBox(height: 16),
+                                  Text(
+                                    '모델 로딩 중...',
+                                    style: TextStyle(color: Colors.white),
+                                  ),
+                                ],
+                              )
+                            : const CircularProgressIndicator(),
+                      ),
                     ),
             ),
             const SizedBox(height: 16),
-            // 감지된 라벨 표시 (앱용)
+            // 감지된 라벨 표시
             if (_detectedObjects.isNotEmpty)
               Container(
                 padding: const EdgeInsets.all(12),
@@ -523,22 +605,26 @@ class _CameraDetectorViewState extends State<CameraDetectorView> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        '감지된 아이템: ${_detectedObjects.first.labels.isNotEmpty ? _detectedObjects.first.labels.first.text : "감지 중..."}',
+                        '감지된 아이템: ${_detectedObjects.map((obj) => obj['className'] ?? 'Unknown').where((name) => name != 'Unknown').toSet().join(", ")}',
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           color: Theme.of(context).colorScheme.onPrimaryContainer,
                         ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ],
                 ),
               ),
-            // 2. "촬영하기" / "취소" 버튼
+            // 버튼
             Row(
               children: [
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: _detectedObjects.isNotEmpty ? _capturePhoto : null,
+                    onPressed: (_detector != null && _detector!.isInitialized)
+                        ? _capturePhoto
+                        : null,
                     icon: const Icon(Icons.camera_alt),
                     label: const Text('촬영하기'),
                   ),
@@ -559,3 +645,4 @@ class _CameraDetectorViewState extends State<CameraDetectorView> {
     );
   }
 }
+

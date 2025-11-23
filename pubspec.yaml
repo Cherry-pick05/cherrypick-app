@@ -48,6 +48,7 @@ dependencies:
 
   #AI
   google_mlkit_object_detection: ^0.15.0
+  tflite_flutter: ^0.11.0
 
   permission_handler: ^12.0.1
 
@@ -59,4 +60,9 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/cherry_pick_demo.tflite
+    - assets/cherry_pick_demo.tflite  # MediaPipe OVD (기존)
+    - assets/yolo_world_ovd.tflite    # YOLO World OVD (새 모델)
+    - assets/yolov8s-worldv2_float32.tflite
+    - assets/labels.txt
+    - assets/best_float32.tflite
+    
