@@ -63,7 +63,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
 
               //카테고리
               DropdownButtonFormField<String>(
-                value: _selectedCategory.isEmpty ? null : _selectedCategory,
+                initialValue: _selectedCategory.isEmpty ? null : _selectedCategory,
                 decoration: const InputDecoration(labelText: '카테고리'),
                 items: _categories.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
                 onChanged: (v) => setState(() => _selectedCategory = v ?? ''),
@@ -73,7 +73,7 @@ class _AddItemDialogState extends State<AddItemDialog> {
 
               //가방 위치
               DropdownButtonFormField<String>(
-                value: _selectedLocation,
+                initialValue: _selectedLocation,
                 decoration: const InputDecoration(labelText: '가방 위치'),
                 items: _locations.map((l) => DropdownMenuItem(value: l, child: Text(l))).toList(),
                 onChanged: (v) => setState(() => _selectedLocation = v ?? '메인칸'),

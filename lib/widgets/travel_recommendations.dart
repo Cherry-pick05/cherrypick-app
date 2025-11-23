@@ -80,7 +80,7 @@ class _TravelRecommendationsState extends State<TravelRecommendations>
             children: [
               Expanded(
                 child: DropdownButtonFormField<String>(
-                  value: _selectedDestination.isEmpty ? null : _selectedDestination,
+                  initialValue: _selectedDestination.isEmpty ? null : _selectedDestination,
                   decoration: const InputDecoration(labelText: '여행지'),
                   isExpanded: true,
                   items: _destinations.map((d) => DropdownMenuItem(value: d, child: Text(d, overflow: TextOverflow.ellipsis))).toList(),
@@ -90,7 +90,7 @@ class _TravelRecommendationsState extends State<TravelRecommendations>
               const SizedBox(width: 12),
               Expanded(
                 child: DropdownButtonFormField<String>(
-                  value: _selectedDuration.isEmpty ? null : _selectedDuration,
+                  initialValue: _selectedDuration.isEmpty ? null : _selectedDuration,
                   decoration: const InputDecoration(labelText: '여행 기간'),
                   isExpanded: true,
                   items: _durations.map((d) => DropdownMenuItem(value: d, child: Text(d, overflow: TextOverflow.ellipsis))).toList(),

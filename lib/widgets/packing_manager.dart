@@ -85,7 +85,7 @@ class _SearchBar extends StatelessWidget {
             hintStyle: TextStyle(color: textColor.withOpacity(0.45)),
             isDense: true,
             filled: true,
-            fillColor: scheme.surfaceVariant.withOpacity(0.12),
+            fillColor: scheme.surfaceContainerHighest.withOpacity(0.12),
             prefixIcon: Icon(Icons.search, color: textColor.withOpacity(0.5)),
             contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 0),
             border: OutlineInputBorder(
@@ -136,7 +136,7 @@ class _BagOverview extends StatelessWidget {
 
                   // 탭 인덱스도 동기화
                   final controller = DefaultTabController.of(context);
-                  if (controller != null && controller.length == bags.length) {
+                  if (controller.length == bags.length) {
                     controller.index = index;
                   }
                 },
@@ -203,11 +203,9 @@ class _BagTabs extends StatelessWidget {
         // Provider의 selectedBag과 TabController 인덱스를 동기화
         final selectedId = packingProvider.selectedBag;
         int selectedIndex = 0;
-        if (selectedId != null) {
-          final idx = bags.indexWhere((b) => b.id == selectedId);
-          if (idx >= 0) selectedIndex = idx;
-        }
-
+        final idx = bags.indexWhere((b) => b.id == selectedId);
+        if (idx >= 0) selectedIndex = idx;
+      
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (controller.index != selectedIndex && controller.length == bags.length) {
             controller.index = selectedIndex;

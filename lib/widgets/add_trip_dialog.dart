@@ -82,7 +82,7 @@ class _AddTripDialogState extends State<AddTripDialog> {
               ),
               const SizedBox(height: 14),
               DropdownButtonFormField<String>(
-                value: _selectedDuration.isEmpty ? null : _selectedDuration,
+                initialValue: _selectedDuration.isEmpty ? null : _selectedDuration,
                 decoration: const InputDecoration(labelText: '여행 기간'),
                 items: _durations.map((d) => DropdownMenuItem(value: d, child: Text(d))).toList(),
                 onChanged: (v) => setState(() => _selectedDuration = v ?? ''),

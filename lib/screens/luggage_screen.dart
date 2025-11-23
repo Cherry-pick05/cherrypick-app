@@ -24,7 +24,7 @@ class _LuggageScreenState extends State<LuggageScreen> {
     final neutralBorder = scheme.outline.withOpacity(0.6); // 일반
     final neutralBorderFocused = scheme.outline;           // 포커스
 
-    PreferredSizeWidget _topBar() {
+    PreferredSizeWidget topBar() {
       final scheme = Theme.of(context).colorScheme;
       final textColor = scheme.onSurface;
 
@@ -89,7 +89,7 @@ class _LuggageScreenState extends State<LuggageScreen> {
                     hintStyle: TextStyle(color: textColor.withOpacity(0.45)),
                     isDense: true,
                     filled: true,
-                    fillColor: scheme.surfaceVariant.withOpacity(0.12),
+                    fillColor: scheme.surfaceContainerHighest.withOpacity(0.12),
                     prefixIcon: Icon(Icons.search, color: textColor.withOpacity(0.5)),
                     contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 0),
                     border: OutlineInputBorder(
@@ -117,7 +117,7 @@ class _LuggageScreenState extends State<LuggageScreen> {
     if (bagCount == 0) {
       return Scaffold(
         backgroundColor: scheme.surface,
-        appBar: _topBar(),
+        appBar: topBar(),
         body: const PackingManager(showSearch: false),
         bottomNavigationBar: const BottomNavigation(currentIndex: 0),
       );
@@ -129,7 +129,7 @@ class _LuggageScreenState extends State<LuggageScreen> {
       length: bagCount,
       child: Scaffold(
         backgroundColor: scheme.surface,
-        appBar: _topBar(),
+        appBar: topBar(),
         body: const PackingManager(showSearch: false),
         bottomNavigationBar: const BottomNavigation(currentIndex: 0),
       ),

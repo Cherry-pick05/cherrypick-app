@@ -1,11 +1,112 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:typed_data';
+import 'package:provider/provider.dart';
+import '../models/packing_item.dart';
+import '../providers/packing_provider.dart';
+import '../models/bag.dart' as bag;
 
 // --- 새로 만들 camera_detector_view 임포트 ---
 // widgets 폴더에 있으므로, screens 폴더로 한 단계 위로 올라갑니다.
 import '../screens/object_detection/camera_detector_view.dart';
 // 기존 camera, mlkit 관련 임포트는 모두 삭제합니다.
+
+// (1) 아이템 추가용 BottomSheet 위젯 정의
+class AddItemSheet extends StatefulWidget {
+  final String initialLabel;
+  final String initialCategory;
+  final List<bag.Bag> bags;
+  final String? initialLocation;
+  final Function({required String label, required String category, required String bagId, String? location}) onConfirm;
+
+  const AddItemSheet({
+    super.key,
+    required this.initialLabel,
+    required this.initialCategory,
+    required this.bags,
+    this.initialLocation,
+    required this.onConfirm,
+  });
+
+  @override
+  State<AddItemSheet> createState() => _AddItemSheetState();
+}
+
+class _AddItemSheetState extends State<AddItemSheet> {
+  late TextEditingController _labelController;
+  late TextEditingController _locationController;
+  bag.Bag? _selectedBag;
+  String? _selectedCategory;
+
+  // 체리픽 탭에서 쓰는 것과 동일하게, 가방 type에 대한 한글 라벨 제공
+  final Map<String, String> _typeLabels = const {
+    'carry-on': '기내용',
+    'checked': '위탁용',
+    'personal': '개인 소지품',
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _labelController = TextEditingController(text: widget.initialLabel);
+    _locationController = TextEditingController(text: widget.initialLocation ?? '');
+    _selectedCategory = widget.initialCategory;
+    if (widget.bags.isNotEmpty) {
+      _selectedBag = widget.bags.first;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: MediaQuery.of(context).viewInsets.add(const EdgeInsets.all(16)),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('가방 선택', style: TextStyle(fontWeight: FontWeight.bold)),
+          DropdownButton<bag.Bag>(
+            value: _selectedBag,
+            items: widget.bags
+                .map((bag) => DropdownMenuItem(
+                      value: bag,
+                      child: Text(_typeLabels[bag.type] ?? bag.name),
+                    ))
+                .toList(),
+            onChanged: (bag) => setState(() => _selectedBag = bag),
+          ),
+          const SizedBox(height: 8),
+          const Text('아이템명 수정', style: TextStyle(fontWeight: FontWeight.bold)),
+          TextField(controller: _labelController),
+          const SizedBox(height: 8),
+          const Text('카테고리', style: TextStyle(fontWeight: FontWeight.bold)),
+          DropdownButton<String>(
+            value: _selectedCategory,
+            items: ['전자기기', '액체류', '서류', '기타']
+                .map((cat) => DropdownMenuItem(value: cat, child: Text(cat)))
+                .toList(),
+            onChanged: (val)=>setState(()=>_selectedCategory=val),
+          ),
+          const SizedBox(height: 8),
+          const Text('가방 내 위치', style: TextStyle(fontWeight: FontWeight.bold)),
+          TextField(controller: _locationController, decoration: const InputDecoration(hintText: '예) 앞주머니')), 
+          const SizedBox(height:16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              ElevatedButton(
+                onPressed: _selectedBag!=null && _labelController.text.isNotEmpty && _selectedCategory!=null ? () {
+                  widget.onConfirm(label: _labelController.text, category: _selectedCategory!, bagId: _selectedBag!.id, location: _locationController.text);
+                } : null,
+                child: const Text("짐에 추가"),
+              )
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class ItemScanner extends StatefulWidget {
   const ItemScanner({super.key});
@@ -606,14 +707,34 @@ class _ItemScannerState extends State<ItemScanner> {
     });
   }
 
-  // "짐 리스트 추가" 버튼 로직
+  // (2) Provider에서 현재 가방 목록을 받아옴
   void _addToPackingList() {
-    // TODO: 여기서 _scanResult.item (예: "보조배터리")을
-    // Provider나 다른 상태 관리로 전달하여 "어느 가방에 넣을지" 묻는
-    // 다이얼로그를 띄우고 짐 리스트에 추가하는 로직 구현
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${_scanResult?.item ?? ""}을(를) 짐 리스트에 추가합니다.')),
-    );
+    final bagList = context.read<PackingProvider>().bags;
+    showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (ctx) {
+          return AddItemSheet(
+            initialLabel: _scanResult?.item ?? '',
+            initialCategory: _scanResult?.category ?? '기타',
+            bags: bagList, // <-- id 리스트가 아닌 모델 리스트 전달!
+            initialLocation: '',
+            onConfirm: ({required label, required category, required bagId, String? location}) {
+              // (3) Provider를 통해 실제 짐리스트에 추가
+              final newItem = PackingItem(
+                id: DateTime.now().millisecondsSinceEpoch.toString(),
+                name: label,
+                category: category,
+                packed: false,
+                bagId: bagId,
+                location: location ?? '',
+              );
+              context.read<PackingProvider>().addItem(newItem);
+              Navigator.of(ctx).pop();
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('짐에 추가 완료')));
+            },
+          );
+        });
   }
 }
 
