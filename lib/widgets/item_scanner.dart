@@ -126,8 +126,8 @@ class _ItemScannerState extends State<ItemScanner> {
   // --- UI 상태 변수 ---
   // 앱 시작 시 "옵션" 뷰로 시작하도록 _currentView 상태를 설정합니다.
   ScanView _currentView = ScanView.options;
-  // 촬영되거나 갤러리에서 업로드된 이미지를 저장하는 변수입니다.
-  XFile? _selectedImage;
+  // 촬영되거나 갤러리에서 업로드된 이미지 바이트를 저장하는 변수입니다.
+  Uint8List? _selectedImageBytes;
 
   // --- 스캔 결과 변수 ---
   // "AI가 물품을 분석하고 있어요..." 인디케이터를 표시할지 결정합니다.
@@ -198,10 +198,10 @@ class _ItemScannerState extends State<ItemScanner> {
           key: const ValueKey('camera_view'),
 
           // '촬영하기' 버튼을 누르면 이 콜백이 실행됨
-          onPhotoCaptured: (XFile image, List<String> labels) {
-            // 카메라 뷰에서 이미지(image)와 라벨 리스트(labels)를 받음
+          onPhotoCaptured: (Uint8List? imageBytes, List<String> labels) {
+            // 카메라 뷰에서 이미지 바이트(imageBytes)와 라벨 리스트(labels)를 받음
             setState(() {
-              _selectedImage = image; // 받은 이미지 저장
+              _selectedImageBytes = imageBytes; // 받은 이미지 바이트 저장
               _currentView = ScanView.preview; // UI를 '결과 확인' 뷰로 전환
             });
             // 받은 라벨 중 첫 번째 항목(없으면 null)을 비즈니스 로직으로 전달
@@ -278,8 +278,8 @@ class _ItemScannerState extends State<ItemScanner> {
 
   // 이미지 프리뷰 및 결과 UI (수정됨)
   Widget _buildImagePreview() {
-    // _selectedImage가 null이 아닐 때만 호출됩니다.
-    if (_selectedImage == null) {
+    // _selectedImageBytes가 null이 아닐 때만 호출됩니다.
+    if (_selectedImageBytes == null) {
       // 혹시 모르니 빈 컨테이너 반환
       return Container(key: const ValueKey('preview_empty'));
     }
@@ -291,22 +291,45 @@ class _ItemScannerState extends State<ItemScanner> {
         child: Column(
           children: [
             // 촬영/업로드된 이미지 표시
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: AspectRatio(
-                aspectRatio: 1.0, // 1:1 비율 강제
-                child: FutureBuilder<Uint8List>(
-                  future: _selectedImage!.readAsBytes(),
-                  builder: (context, snap) {
-                    if (!snap.hasData) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-                    // BoxFit.contain을 사용하여 이미지가 잘리지 않고 비율에 맞게 표시
-                    return Image.memory(snap.data!, fit: BoxFit.contain);
-                  },
+            if (_selectedImageBytes != null)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: AspectRatio(
+                  aspectRatio: 1.0, // 1:1 비율 강제
+                  child: Image.memory(
+                    _selectedImageBytes!,
+                    fit: BoxFit.contain,
+                  ),
+                ),
+              )
+            else
+              // 이미지가 없는 경우 (웹에서 바코드만 감지된 경우)
+              Container(
+                height: 200,
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.check_circle,
+                        size: 48,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '아이템이 감지되었습니다',
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
             const SizedBox(height: 16),
 
             // "분석 중..." 인디케이터 표시
@@ -622,8 +645,9 @@ class _ItemScannerState extends State<ItemScanner> {
     final picker = ImagePicker();
     final image = await picker.pickImage(source: ImageSource.gallery);
     if (image != null) {
+      final imageBytes = await image.readAsBytes();
       setState(() {
-        _selectedImage = image;
+        _selectedImageBytes = imageBytes;
         _currentView = ScanView.preview; // (수정) 뷰 상태를 '결과 확인'으로 변경
       });
 
@@ -700,7 +724,7 @@ class _ItemScannerState extends State<ItemScanner> {
   void _resetScan() {
     // 모든 상태를 초기화하고 '옵션' 뷰로 되돌아감
     setState(() {
-      _selectedImage = null;
+      _selectedImageBytes = null;
       _scanResult = null;
       _isScanning = false;
       _currentView = ScanView.options; // (수정) 다시 스캔 시 옵션 뷰로
