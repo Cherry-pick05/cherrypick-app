@@ -45,5 +45,10 @@ public final class GeneratedPluginRegistrant {
     } catch (Exception e) {
       Log.e(TAG, "Error registering plugin sqflite_android, com.tekartik.sqflite.SqflitePlugin", e);
     }
+    try {
+      flutterEngine.getPlugins().add(new com.ultralytics.yolo.YOLOPlugin());
+    } catch (Exception e) {
+      Log.e(TAG, "Error registering plugin ultralytics_yolo, com.ultralytics.yolo.YOLOPlugin", e);
+    }
   }
 }

@@ -26,6 +26,7 @@ dependencies:
   # Camera & Image
   camera: ^0.10.5+5
   image_picker: ^1.0.4
+  ultralytics_yolo: ^0.1.42
   
   # Storage
   shared_preferences: ^2.3.2
@@ -58,3 +59,5 @@ flutter:
     - assets/images/Cherry_Pick_Text.svg
     - assets/images/Cherry_Pick_Text.png
     - assets/images/Cherry_Pick_LOGO.png
+    - assets/models/yolov8s-worldv2.pt
+    - assets/models/yolov8s-worldv2_float32.tflite
